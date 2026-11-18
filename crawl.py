@@ -2,7 +2,12 @@
 
 python3 crawl.py full   # 全量翻页（首次，约 2.5 万页）
 python3 crawl.py inc    # 增量：只拉最近 48 小时更新的（每天跑）
+python3 crawl.py index  # 不抓，只拿 titles.json 重出名单
+
+名单每行「首字母\t片名\t几个源有」，按首字母排，同首字母里源多的在前；
+多音字另出至多 3 个别的读法（源数记 0，排在正读后面），如 琅琊榜之风起长林 正读 LYBZFQZL、另有 LYBZFQCL。
 """
+import itertools
 import concurrent.futures as cf
 import gzip
 import json
@@ -12,7 +17,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from pypinyin import Style, lazy_pinyin
+from pypinyin import Style, lazy_pinyin, pinyin
 
 SITES = [
     "http://cj.ffzyapi.com/api.php/provide/vod",
@@ -70,14 +75,32 @@ def site_names(api, extra):
     return names
 
 
+def letter(part):
+    for ch in part:
+        if ch.isascii() and ch.isalnum():
+            return ch.upper()
+    return ""
+
+
 def initials(name):
+    return "".join(letter(p) for p in lazy_pinyin(name, style=Style.FIRST_LETTER, errors=lambda s: list(s)))
+
+
+def variants(name, key, cap=3):
+    """多音字的别的读法拼出来的首字母（正读除外，至多 cap 个）。"""
+    opts = []
+    for p in pinyin(name, style=Style.FIRST_LETTER, heteronym=True, errors=lambda s: list(s)):
+        letters = list(dict.fromkeys(filter(None, (letter(x) for x in p))))
+        if letters:
+            opts.append(letters)
     out = []
-    for part in lazy_pinyin(name, style=Style.FIRST_LETTER, errors=lambda s: list(s)):
-        for ch in part:
-            if ch.isascii() and ch.isalnum():
-                out.append(ch.upper())
+    for combo in itertools.product(*opts):
+        v = "".join(combo)
+        if v != key and v not in out:
+            out.append(v)
+            if len(out) >= cap:
                 break
-    return "".join(out)
+    return out
 
 
 def main(mode):
@@ -85,21 +108,25 @@ def main(mode):
         titles = json.load(open(TITLES, encoding="utf-8"))
     except FileNotFoundError:
         titles = {}
-    extra = {} if mode == "full" else {"h": 48}
-    for api in SITES:
-        for n in site_names(api, extra):
-            if mode == "full" or n not in titles:
-                titles[n] = titles.get(n, 0) + 1
-    json.dump(titles, open(TITLES, "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    if mode != "index":
+        extra = {} if mode == "full" else {"h": 48}
+        for api in SITES:
+            for n in site_names(api, extra):
+                if mode == "full" or n not in titles:
+                    titles[n] = titles.get(n, 0) + 1
+        json.dump(titles, open(TITLES, "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     rows = []
     for n, c in titles.items():
         key = initials(n)
-        if len(key) >= 2:
-            rows.append((key, -c, len(n), n))
+        if len(key) < 2:
+            continue
+        rows.append((key, 0, -c, len(n), n, c))
+        for v in variants(n, key):
+            rows.append((v, 1, -c, len(n), n, 0))
     rows.sort()
     with gzip.open("index.txt.gz", "wt", encoding="utf-8", compresslevel=9) as f:
-        for key, _, _, n in rows:
-            f.write(key + "\t" + n + "\n")
+        for key, _, _, _, n, c in rows:
+            f.write(f"{key}\t{n}\t{c}\n")
     print("titles", len(titles), "rows", len(rows))
 
 

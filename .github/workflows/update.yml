@@ -1,0 +1,27 @@
+name: update
+on:
+  schedule:
+    - cron: "20 19 * * *"  # 每天 04:20 JST
+  workflow_dispatch:
+    inputs:
+      mode:
+        default: inc
+permissions:
+  contents: write
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pypinyin==0.55.0
+      - run: python crawl.py ${{ inputs.mode || 'inc' }}
+      - run: |
+          git config user.name "tototv-index bot"
+          git config user.email "actions@github.com"
+          git add titles.json index.txt.gz
+          git diff --cached --quiet || git commit -m "chore: 更新首字母名单 $(date -u +%F)"
+          git push
